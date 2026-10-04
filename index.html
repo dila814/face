@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Neon Face Scan V2</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#020506;color:#dffffa;font-family:Arial,sans-serif}
+#app{position:fixed;inset:0;background:#020809}
+#video,#canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#video{transform:scaleX(-1);filter:brightness(.78) contrast(1.15)}
+#canvas{pointer-events:none}
+.overlay{position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle,transparent 35%,rgba(0,0,0,.72) 100%)}
+.grid{position:absolute;inset:0;pointer-events:none;opacity:.16;background-image:linear-gradient(rgba(0,255,220,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,220,.35) 1px,transparent 1px);background-size:45px 45px}
+.top{position:absolute;top:16px;left:16px;right:16px;display:flex;justify-content:space-between;z-index:5}
+.title{font-weight:900;letter-spacing:4px;font-size:17px;text-shadow:0 0 15px #00ffe0}.small{font-size:9px;letter-spacing:2px;opacity:.65;margin-top:5px}
+.status{padding:8px 10px;border:1px solid #00a894;background:#001615bb;font-size:9px;letter-spacing:2px}
+#dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff4055;margin-right:6px;box-shadow:0 0 9px #ff4055}
+.online #dot{background:#00ffd5;box-shadow:0 0 12px #00ffd5}
+.panel{position:absolute;z-index:5;left:15px;bottom:15px;width:min(330px,calc(100% - 30px));padding:14px;background:#001011c9;border:1px solid #007f73;backdrop-filter:blur(8px)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:12px}.stat{font-size:8px;color:#6d9d98;letter-spacing:1px}.stat b{display:block;color:#dffffa;font-size:12px;margin-top:4px}
+button{width:100%;padding:12px;background:#00ffe014;border:1px solid #00ffe0;color:#dffffa;font-weight:800;letter-spacing:2px}
+button:disabled{opacity:.45}.hint{font-size:9px;color:#759692;line-height:1.45;margin-top:9px}
+#start{position:absolute;z-index:10;inset:0;display:flex;align-items:center;justify-content:center;padding:22px;background:radial-gradient(circle,#073235,#020506 68%)}
+.card{width:min(430px,100%);padding:30px 24px;text-align:center;border:1px solid #00a894;background:#001011e8;box-shadow:0 0 45px #00ffe01a}.card h1{letter-spacing:6px;margin:0 0 8px;text-shadow:0 0 18px #00ffe0}.card p{font-size:10px;line-height:1.7;color:#83aaa6;margin:0 0 20px}.card button{font-size:11px}
+#error{display:none;margin-top:12px;color:#ff7180;font-size:10px;line-height:1.5}
+.scan{position:absolute;z-index:3;left:0;width:100%;height:2px;background:linear-gradient(90deg,transparent,#00ffe0,transparent);box-shadow:0 0 14px #00ffe0;animation:scan 3s linear infinite}
+@keyframes scan{0%{top:0}50%{top:100%}100%{top:0}}
+</style>
+</head>
+<body>
+<div id="app">
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
+<div class="grid"></div><div class="overlay"></div><div class="scan"></div>
+
+<div class="top">
+ <div><div class="title">NEON FACE SCAN</div><div class="small">REAL-TIME FACE VISUALIZER</div></div>
+ <div id="status" class="status"><span id="dot"></span><span id="statusText">OFFLINE</span></div>
+</div>
+
+<div class="panel">
+ <div class="stats">
+  <div class="stat">FACE <b id="face">SEARCHING</b></div>
+  <div class="stat">FPS <b id="fps">0</b></div>
+  <div class="stat">POINTS <b>468</b></div>
+  <div class="stat">MODE <b>NEON TRACK</b></div>
+ </div>
+ <button id="stop" disabled>STOP CAMERA</button>
+ <div class="hint">If camera access is blocked, use Chrome and open this page through HTTPS or localhost.</div>
+</div>
+
+<div id="start">
+ <div class="card">
+  <h1>FACE SCAN</h1>
+  <p>Press the button, allow camera permission, and keep your face inside the camera view.</p>
+  <button id="go">ACTIVATE CAMERA</button>
+  <div id="error"></div>
+ </div>
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script>
+const v=document.getElementById('video'), c=document.getElementById('canvas'), x=c.getContext('2d');
+const go=document.getElementById('go'), stop=document.getElementById('stop'), start=document.getElementById('start');
+const err=document.getElementById('error'), status=document.getElementById('status'), st=document.getElementById('statusText');
+const face=document.getElementById('face'), fpsEl=document.getElementById('fps');
+let stream=null,running=false,last=performance.now(),count=0;
+
+function size(){const d=devicePixelRatio||1;c.width=innerWidth*d;c.height=innerHeight*d;c.style.width=innerWidth+'px';c.style.height=innerHeight+'px';x.setTransform(d,0,0,d,0,0)}
+addEventListener('resize',size);size();
+
+function message(t){err.textContent=t;err.style.display='block'}
+function setOnline(on,t){status.classList.toggle('online',on);st.textContent=t}
+
+function draw(r){
+ x.clearRect(0,0,innerWidth,innerHeight);
+ if(!r.multiFaceLandmarks?.length){face.textContent='SEARCHING';return}
+ face.textContent='DETECTED';
+ const p=r.multiFaceLandmarks[0].map(q=>({x:(1-q.x)*innerWidth,y:q.y*innerHeight}));
+ const glow='#00ffe0';
+
+ // many tiny neon landmark points
+ x.save();x.shadowColor=glow;x.shadowBlur=8;
+ for(let i=0;i<p.length;i+=2){x.fillStyle=i%12===0?'#eaffff':'#00cdbb';x.beginPath();x.arc(p[i].x,p[i].y,i%12===0?2:1,0,Math.PI*2);x.fill()}
+ x.restore();
+
+ // Connect selected landmark paths to create a clean futuristic face mesh
+ const paths=[
+  [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377],
+  [234,93,132,58,127,162,21,54,103,67,109,10,67,109],
+  [61,146,91,181,181,190,291,181,321,146],
+  [33,133,159,145,152,234,173,263,362,374,454,263],
+  [78,95,191,80,308,95,178,152,78,95]
+ ];
+ x.save();x.strokeStyle='rgba(0,255,220,.72)';x.lineWidth=1;x.shadowColor=glow;x.shadowBlur=7;
+ for(const a of paths){x.beginPath();a.forEach((i,n)=>{const q=p[i];if(!q)return;n?x.lineTo(q.x,q.y):x.moveTo(q.x,q.y)});x.stroke()}
+ x.restore();
+
+ // face bounding scanner corners
+ let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+ p.forEach(q=>{minX=Math.min(minX,q.x);maxX=Math.max(maxX,q.x);minY=Math.min(minY,q.y);maxY=Math.max(maxY,q.y)});
+ const px=20, X=minX-px,Y=minY-px,W=maxX-minX+px*2,H=maxY-minY+px*2,L=22;
+ x.save();x.strokeStyle=glow;x.lineWidth=1.5;x.shadowColor=glow;x.shadowBlur=10;x.beginPath();
+ x.moveTo(X,Y+L);x.lineTo(X,Y);x.lineTo(X+L,Y);x.moveTo(X+W-L,Y);x.lineTo(X+W,Y);x.lineTo(X+W,Y+L);
+ x.moveTo(X,Y+H-L);x.lineTo(X,Y+H);x.lineTo(X+L,Y+H);x.moveTo(X+W-L,Y+H);x.lineTo(X+W,Y+H);x.lineTo(X+W,Y+H-L);x.stroke();x.restore();
+}
+
+let mesh;
+function setupMesh(){
+ if(typeof FaceMesh==='undefined')throw new Error('Face detection library did not load. Check your internet connection.');
+ mesh=new FaceMesh({locateFile:f=>'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/'+f});
+ mesh.setOptions({maxNumFaces:1,refineLandmarks:true,minDetectionConfidence:.5,minTrackingConfidence:.5});
+ mesh.onResults(r=>{
+  if(!running)return;draw(r);count++;
+  const now=performance.now();if(now-last>=1000){fpsEl.textContent=count;count=0;last=now}
+ });
+}
+
+async function loop(){
+ if(!running)return;
+ if(v.readyState>=2){try{await mesh.send({image:v})}catch(e){console.log(e)}}
+ requestAnimationFrame(loop);
+}
+
+async function startCam(){
+ err.style.display='none';
+ try{
+  if(!navigator.mediaDevices?.getUserMedia){
+   throw new Error('Camera API is blocked. Open this page in Chrome using HTTPS or localhost.');
+  }
+  setupMesh();
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});
+  v.srcObject=stream;await v.play();running=true;
+  start.style.display='none';stop.disabled=false;setOnline(true,'SCANNER ONLINE');loop();
+ }catch(e){
+  console.error(e);
+  message(e.message||'Camera could not start. Allow camera permission and try again.');
+  setOnline(false,'CAMERA ERROR');
+ }
+}
+function stopCam(){
+ running=false;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;v.srcObject=null;
+ x.clearRect(0,0,innerWidth,innerHeight);start.style.display='flex';stop.disabled=true;setOnline(false,'OFFLINE');face.textContent='SEARCHING';fpsEl.textContent='0';
+}
+go.onclick=startCam;stop.onclick=stopCam;
+</script>
+</body>
+</html>
